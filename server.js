@@ -1,24 +1,37 @@
+// server.js
 const express = require("express");
 const ytdl = require("ytdl-core");
 const cors = require("cors");
 
 const app = express();
+
+// Allow all origins (fine for testing). If you want to restrict, set origin: "https://your-frontend.com"
 app.use(cors());
 
-// Get video info
+// Simple root route so visiting / doesn't 404
+app.get("/", (req, res) => {
+  res.send("✅ YouTube Downloader API is running! Use /api/info?url=VIDEO_URL");
+});
+
+// GET video info
 app.get("/api/info", async (req, res) => {
   const url = req.query.url;
-  if (!ytdl.validateURL(url)) return res.status(400).json({ error: "Invalid URL" });
+  if (!url || !ytdl.validateURL(url)) {
+    return res.status(400).json({ error: "Invalid or missing url parameter" });
+  }
 
   try {
     const info = await ytdl.getInfo(url);
     const formats = info.formats
-      .filter(f => f.hasVideo || f.hasAudio)
+      .filter(f => (f.hasVideo || f.hasAudio))
       .map(f => ({
-        quality: f.qualityLabel || `${f.audioBitrate}kbps`,
-        size: f.contentLength ? (f.contentLength / (1024 * 1024)).toFixed(1) + " MB" : "N/A",
-        type: f.hasVideo ? "video" : "audio",
-        url: f.url
+        itag: f.itag,
+        qualityLabel: f.qualityLabel || null,
+        audioBitrate: f.audioBitrate || null,
+        size: f.contentLength ? (Number(f.contentLength) / (1024 * 1024)).toFixed(1) + " MB" : "N/A",
+        mimeType: f.mimeType || '',
+        hasVideo: !!f.hasVideo,
+        hasAudio: !!f.hasAudio
       }));
 
     res.json({
@@ -29,20 +42,29 @@ app.get("/api/info", async (req, res) => {
       views: info.videoDetails.viewCount,
       uploadDate: info.videoDetails.uploadDate,
       description: info.videoDetails.description,
-      qualities: formats
+      formats
     });
   } catch (err) {
-    res.status(500).json({ error: "Failed to fetch info" });
+    console.error("Error /api/info:", err);
+    res.status(500).json({ error: "Failed to fetch video info" });
   }
 });
 
-// Download route
+// Stream/download route: supply ?url=...&itag=XXX to choose format
 app.get("/api/download", (req, res) => {
-  const { url, quality } = req.query;
-  if (!ytdl.validateURL(url)) return res.status(400).send("Invalid URL");
+  const { url, itag } = req.query;
+  if (!url || !ytdl.validateURL(url)) return res.status(400).send("Invalid url");
 
+  // If itag provided, attempt to use that. Otherwise stream best
+  const options = itag ? { quality: itag } : {};
   res.header("Content-Disposition", 'attachment; filename="video.mp4"');
-  ytdl(url, { quality }).pipe(res);
+
+  try {
+    ytdl(url, options).pipe(res);
+  } catch (err) {
+    console.error("Error /api/download:", err);
+    res.status(500).send("Download failed");
+  }
 });
 
 const PORT = process.env.PORT || 8080;
