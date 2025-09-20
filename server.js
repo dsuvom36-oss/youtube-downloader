@@ -8,7 +8,7 @@ const { randomUUID } = require("crypto");
 
 const app = express();
 
-// ✅ Allow requests from your GitHub Pages frontend
+// ✅ Allow only your GitHub Pages frontend
 app.use(cors({
   origin: "https://dsuvom36-oss.github.io"
 }));
@@ -86,7 +86,6 @@ app.get("/api/hls/start", async (req, res) => {
     const playlist = "index.m3u8";
     const playlistPath = path.join(outDir, playlist);
 
-    // ffmpeg args
     const args = [
       "-hide_banner", "-loglevel", "warning",
       "-i", "pipe:0",
@@ -101,11 +100,9 @@ app.get("/api/hls/start", async (req, res) => {
     const ffmpeg = spawn("ffmpeg", args);
     ffmpeg.on("close", code => console.log(`FFmpeg exited (${code}) for job ${id}`));
 
-    // YouTube input
     const yt = ytdl(url, { quality: "highest" });
     yt.pipe(ffmpeg.stdin);
 
-    // Respond when playlist is created
     const checkPlaylist = () => {
       if (fs.existsSync(playlistPath)) {
         return res.json({ id, playlistUrl: `/hls/${id}/${playlist}` });
@@ -114,7 +111,6 @@ app.get("/api/hls/start", async (req, res) => {
     };
     checkPlaylist();
 
-    // Auto cleanup after 10 minutes
     setTimeout(() => {
       try { ffmpeg.kill("SIGKILL"); } catch(e){}
       fs.rm(outDir, { recursive: true, force: true }, () => {});
