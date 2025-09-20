@@ -1,72 +1,98 @@
-// server.js
-const express = require("express");
-const ytdl = require("ytdl-core");
-const cors = require("cors");
+const express = require('express');
+const ytdl = require('ytdl-core');
+const cors = require('cors');
+const { spawn } = require('child_process');
+const fs = require('fs');
+const path = require('path');
+const { v4: uuidv4 } = require('uuid');
 
 const app = express();
-
-// Allow all origins (fine for testing). If you want to restrict, set origin: "https://your-frontend.com"
 app.use(cors());
+app.use(express.json());
 
-// Simple root route so visiting / doesn't 404
-app.get("/", (req, res) => {
-  res.send("✅ YouTube Downloader API is running! Use /api/info?url=VIDEO_URL");
-});
+const HLS_ROOT = path.join(__dirname, 'hls'); // make sure writable
+if (!fs.existsSync(HLS_ROOT)) fs.mkdirSync(HLS_ROOT);
 
-// GET video info
-app.get("/api/info", async (req, res) => {
+// Start an HLS job: returns an id you can use to access /hls/<id>/index.m3u8
+app.get('/api/hls/start', async (req, res) => {
   const url = req.query.url;
-  if (!url || !ytdl.validateURL(url)) {
-    return res.status(400).json({ error: "Invalid or missing url parameter" });
-  }
+  if (!url || !ytdl.validateURL(url)) return res.status(400).json({ error: 'Invalid url' });
 
-  try {
-    const info = await ytdl.getInfo(url);
-    const formats = info.formats
-      .filter(f => (f.hasVideo || f.hasAudio))
-      .map(f => ({
-        itag: f.itag,
-        qualityLabel: f.qualityLabel || null,
-        audioBitrate: f.audioBitrate || null,
-        size: f.contentLength ? (Number(f.contentLength) / (1024 * 1024)).toFixed(1) + " MB" : "N/A",
-        mimeType: f.mimeType || '',
-        hasVideo: !!f.hasVideo,
-        hasAudio: !!f.hasAudio
-      }));
+  const id = uuidv4();
+  const outDir = path.join(HLS_ROOT, id);
+  fs.mkdirSync(outDir);
 
-    res.json({
-      title: info.videoDetails.title,
-      channel: info.videoDetails.author.name,
-      thumbnail: info.videoDetails.thumbnails.pop().url,
-      duration: new Date(info.videoDetails.lengthSeconds * 1000).toISOString().substr(11, 8),
-      views: info.videoDetails.viewCount,
-      uploadDate: info.videoDetails.uploadDate,
-      description: info.videoDetails.description,
-      formats
-    });
-  } catch (err) {
-    console.error("Error /api/info:", err);
-    res.status(500).json({ error: "Failed to fetch video info" });
-  }
+  // Prepare ffmpeg args:
+  // -y overwrite, -i - read stdin, -c:v libx264 encode video, -c:a aac audio,
+  // -preset veryfast (adjust), -f hls output as playlist
+  const playlist = 'index.m3u8';
+  const args = [
+    '-hide_banner', '-loglevel', 'warning',
+    '-i', 'pipe:0',                 // input from stdin
+    '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '23',
+    '-c:a', 'aac', '-b:a', '128k',
+    '-hls_time', '6',               // segment duration
+    '-hls_list_size', '0',         // 0 = all segments (VOD) — for live, use small list_size
+    '-hls_segment_filename', path.join(outDir, 'seg_%03d.ts'),
+    path.join(outDir, playlist)
+  ];
+
+  // Spawn ffmpeg
+  const ff = spawn('ffmpeg', args);
+
+  ff.on('error', (err) => {
+    console.error('ffmpeg spawn error:', err);
+  });
+
+  ff.stderr.on('data', d => {
+    // optional: log for debugging
+    // console.error('ffmpeg:', d.toString());
+  });
+
+  ff.on('close', code => {
+    console.log(`ffmpeg exited with ${code} for job ${id}`);
+    // we'll keep files for a while; consider cleaning after N secs
+  });
+
+  // Pipe YouTube stream into ffmpeg stdin
+  const yt = ytdl(url, { quality: 'highestvideo', filter: (f) => f.container === 'mp4' || true });
+
+  yt.pipe(ff.stdin);
+
+  // After first playlist is written (may be a few seconds), respond with the playlist URL.
+  // We'll poll the output until index.m3u8 exists.
+  const checkPlaylist = () => {
+    const p = path.join(outDir, playlist);
+    if (fs.existsSync(p)) {
+      // return the public path
+      const publicUrl = `/hls/${id}/${playlist}`;
+      return res.json({ id, playlistUrl: publicUrl });
+    } else {
+      setTimeout(checkPlaylist, 500);
+    }
+  };
+  checkPlaylist();
+
+  // Optional: schedule cleanup after X minutes
+  setTimeout(() => {
+    try { ff.kill('SIGKILL'); } catch(e){}
+    // delete folder
+    fs.rm(outDir, { recursive: true, force: true }, err => {});
+    console.log(`Cleaned HLS job ${id}`);
+  }, 1000 * 60 * 10); // cleanup after 10 minutes
 });
 
-// Stream/download route: supply ?url=...&itag=XXX to choose format
-app.get("/api/download", (req, res) => {
-  const { url, itag } = req.query;
-  if (!url || !ytdl.validateURL(url)) return res.status(400).send("Invalid url");
-
-  // If itag provided, attempt to use that. Otherwise stream best
-  const options = itag ? { quality: itag } : {};
-  res.header("Content-Disposition", 'attachment; filename="video.mp4"');
-
-  try {
-    ytdl(url, options).pipe(res);
-  } catch (err) {
-    console.error("Error /api/download:", err);
-    res.status(500).send("Download failed");
+// Serve HLS directory statically
+app.use('/hls', express.static(HLS_ROOT, {
+  setHeaders: (res, filePath) => {
+    // let browser cache segments briefly if desired:
+    if (filePath.endsWith('.ts')) {
+      res.setHeader('Cache-Control', 'public, max-age=5');
+    }
   }
-});
+}));
 
+// existing endpoints...
 const PORT = process.env.PORT || 8080;
-app.listen(PORT, () => console.log(`✅ Server running on port ${PORT}`));
+app.listen(PORT, () => console.log(`Server listening ${PORT}`));
 
