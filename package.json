@@ -1,14 +1,20 @@
 {
   "name": "youtube-downloader",
   "version": "1.0.0",
+  "description": "YouTube Downloader + HLS API",
   "main": "server.js",
   "scripts": {
-    "start": "node server.js"
+    "start": "node server.js",
+    "postinstall": "apt-get update && apt-get install -y yt-dlp"
   },
   "dependencies": {
     "cors": "^2.8.5",
-    "express": "^4.21.2",
-    "uuid": "^13.0.0",
-    "ytdl-core": "^4.11.5"
-  }
+    "express": "^4.18.2"
+  },
+  "engines": {
+    "node": ">=16"
+  },
+  "author": "dsuvom36",
+  "license": "MIT"
 }
+
