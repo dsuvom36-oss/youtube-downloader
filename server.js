@@ -8,10 +8,8 @@ const { randomUUID } = require("crypto");
 
 const app = express();
 
-// ✅ Allow only your GitHub Pages frontend
-app.use(cors({
-  origin: "https://dsuvom36-oss.github.io"
-}));
+// ✅ Allow your GitHub Pages site
+app.use(cors({ origin: "https://dsuvom36-oss.github.io" }));
 app.use(express.json());
 
 // ----------------- API: Info -----------------
@@ -30,7 +28,9 @@ app.get("/api/info", async (req, res) => {
       audioBitrate: f.audioBitrate,
       hasVideo: f.hasVideo,
       hasAudio: f.hasAudio,
-      size: f.contentLength ? (Number(f.contentLength) / 1024 / 1024).toFixed(1) + " MB" : "N/A"
+      size: f.contentLength
+        ? (Number(f.contentLength) / 1024 / 1024).toFixed(1) + " MB"
+        : "N/A"
     }));
 
     res.json({
@@ -44,8 +44,11 @@ app.get("/api/info", async (req, res) => {
       formats
     });
   } catch (err) {
-    console.error("Error in /api/info:", err);
-    res.status(500).json({ error: "Failed to fetch video info" });
+    console.error("❌ Error in /api/info:", err); // log full error in Render
+    res.status(500).json({
+      error: "Failed to fetch video info",
+      details: err.message // send reason back for debugging
+    });
   }
 });
 
@@ -63,8 +66,8 @@ app.get("/api/download", async (req, res) => {
     res.header("Content-Disposition", `attachment; filename="${info.videoDetails.title}.mp4"`);
     ytdl(url, { format }).pipe(res);
   } catch (err) {
-    console.error("Error in /api/download:", err);
-    res.status(500).send("Download failed");
+    console.error("❌ Error in /api/download:", err);
+    res.status(500).send("Download failed: " + err.message);
   }
 });
 
@@ -112,14 +115,14 @@ app.get("/api/hls/start", async (req, res) => {
     checkPlaylist();
 
     setTimeout(() => {
-      try { ffmpeg.kill("SIGKILL"); } catch(e){}
+      try { ffmpeg.kill("SIGKILL"); } catch (e) {}
       fs.rm(outDir, { recursive: true, force: true }, () => {});
       console.log(`Cleaned up job ${id}`);
     }, 10 * 60 * 1000);
 
   } catch (err) {
-    console.error("Error in /api/hls/start:", err);
-    res.status(500).json({ error: "HLS failed" });
+    console.error("❌ Error in /api/hls/start:", err);
+    res.status(500).json({ error: "HLS failed", details: err.message });
   }
 });
 
@@ -136,4 +139,5 @@ const PORT = process.env.PORT || 8080;
 app.listen(PORT, "0.0.0.0", () => {
   console.log(`✅ Server running on port ${PORT}`);
 });
+
 
